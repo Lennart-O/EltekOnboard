@@ -1,7 +1,7 @@
 //Bibliotheken einbinden
 
 #include <Arduino.h>
-#include <mcp_can.h> //aktuell für SeeedStudio Library, J.Fowler Probleme mit extended IDs (aus 1 wird 9). Codeanpassung (mcp_can.cpp) von horace3 von Github
+#include <mcp_can.h> //aktuell für SeeedStudio Library, Codeanpassung (mcp_can.cpp) von horace3 von Github
 #include <SPI.h>
 #include <SimpleTimer.h>
 
@@ -9,9 +9,10 @@
 
 #define SPI_CS_PIN 10 //CS Pin
 #define POTI 0 //A0 für Poti
+#define ENABLE 9 //D9 für Enable Kontakt der Zero, Attached über 5V Spannungsversorgung
 
-word outputvoltage = 1162; //setze max Spannung auf 116,2V (offset = 0,1)
-word outputcurrent = 260; //setze max Strom auf 32A (offset = 0,1)
+word outputvoltage = 1162; //setze max Spannung auf 116V (offset = 0,1)
+word outputcurrent = 250; //setze max Strom auf 26A (offset = 0,1)
 word powerdemand = 1000; //setze max Leistung auf 100% (offset = 0,1)
 float poti = 0;
 
@@ -37,7 +38,7 @@ unsigned long int recId_err1 = 0x307; //Charger address = 1, error (offset 8 fro
 unsigned long int recId_err2 = 0x317; //Charger address = 2, error (offset 8 from base idetifier 2FF + 1*16 for adress)
 unsigned long int recId_err3 = 0x327; //Charger address = 3, error (offset 8 from base idetifier 2FF + 2*16 for adress)
 
-unsigned char voltamp[8] = {0x01, lowByte(powerdemand), highByte(powerdemand), lowByte(outputvoltage), highByte(outputvoltage), lowByte(outputcurrent), highByte(outputcurrent), 0x00};
+unsigned char voltamp[8] = {0x00, lowByte(powerdemand), highByte(powerdemand), lowByte(outputvoltage), highByte(outputvoltage), lowByte(outputcurrent), highByte(outputcurrent), 0x00};
 
 unsigned char len = 0; //Länge emfpangener CAN Nachricht
 unsigned char buf[8]; //Buffer für Daten aus CAN Nachricht
@@ -60,7 +61,6 @@ void canRead(){
   if(CAN_MSGAVAIL == CAN.checkReceive()){ //auf Nachrichten prüfen
 
     CAN.readMsgBuf(&len, buf); // read data, len: data length, buf: data buffer
-    //CAN.readMsgBuf(&id, &len, buf); // read data, canId: ID  len: data length, buf: data buffer, für J.Fowler Library
 
     receiveId = CAN.getCanId(); //auskommentieren für J.Fowler Library
 
@@ -134,7 +134,7 @@ void canRead(){
       float pv_voltage_in = (((float)buf[3]*256.0) + ((float)buf[2])); //highByte/lowByte + offset
       Serial.print(pv_voltage_in);
       Serial.print(" V / Max. Leistung: ");
-      float pv_powermax = (((float)buf[5]*256.0) + ((float)buf[4]))/10.0; //highByte/lowByte + offset
+      float pv_powermax = (((float)buf[5]*256.0) + ((float)buf[4])); //highByte/lowByte + offset
       Serial.print(pv_powermax);
       Serial.print(" W / Verfügbare Leistung: ");
       float pv_powerav = ((float)buf[6]/2); //highByte/lowByte + offset
@@ -142,7 +142,7 @@ void canRead(){
       Serial.print(" % / Temperatur 1: ");
       float pv_temp1 = (float)buf[0]; //highByte/lowByte + offset
       Serial.print(pv_temp1);
-      Serial.print(" °C / Temperatur 1: ");
+      Serial.print(" °C / Temperatur 2: ");
       float pv_temp2 = (float)buf[1]; //highByte/lowByte + offset
       Serial.print(pv_temp2);
       Serial.println(" °C"); //Absatz
@@ -172,14 +172,14 @@ void canRead(){
 
       switch (buf[0]) { //Statusbyte auslesen
 
-        case B00000001: Serial.print("Fehler: DC Überspannung;");
-        case B00000010: Serial.print("Fehler: Übertemperatur;");
-        case B00000100: Serial.print("Fehler: Eingangsspannung unzulässig;");
-        case B00001000: Serial.print("Fehler: AC Überspannung;");
-        case B00010000: Serial.print("Fehler: AC Unterspannung;");
-        case B00100000: Serial.print("Fehler: Übertemperatur;");
-        case B01000000: Serial.print("Fehler: Untertemperatur;");
-        case B10000000: Serial.print("Fehler: Stromlimitierung;");
+        case B00000001: Serial.print("Fehler: DC Überspannung;");break;
+        case B00000010: Serial.print("Fehler: Übertemperatur;");break;
+        case B00000100: Serial.print("Fehler: Eingangsspannung unzulässig;");break;
+        case B00001000: Serial.print("Fehler: AC Überspannung;");break;
+        case B00010000: Serial.print("Fehler: AC Unterspannung;");break;
+        case B00100000: Serial.print("Fehler: Übertemperatur;");break;
+        case B01000000: Serial.print("Fehler: Untertemperatur;");break;
+        case B10000000: Serial.print("Fehler: Stromlimitierung;");break;
         Serial.println(); //Absatz
       }
 
@@ -190,6 +190,27 @@ void canRead(){
         Serial.println(); //Absatz
 
       }
+
+    }else{
+
+      Serial.println("CAN Daten vom Ladegerät empfangen!");
+
+      Serial.print("CAN ID: ");
+      Serial.print(receiveId, HEX); //ID ausgeben
+
+      Serial.print(" / CAN Daten: ");
+      for(int i = 0; i<len; i++){ //Daten ausgeben
+
+        if( buf[i] < 0x10){ // führende Null wenn nur eine Ziffer
+          Serial.print("0");
+        }
+
+        Serial.print(buf[i],HEX);
+        Serial.print(" ");          // Leerzeichen
+
+      }
+
+      Serial.println(); //Absatz
 
     }
 
@@ -227,12 +248,22 @@ void myTimer1() { //zyklisch vom Timer aufgerufene Funktion
 
   }
 
-  Serial.print("Eingestellter Ladestrom: ");
-  Serial.print((float)outputcurrent/10.0); //Current setpoint ausgeben
-  Serial.println(" A");
-  unsigned char voltamp[8] = {0x01, lowByte(powerdemand), highByte(powerdemand), lowByte(outputvoltage), highByte(outputvoltage), lowByte(outputcurrent), highByte(outputcurrent), 0x00}; //Nachricht neu generieren
+  Serial.print("Eingestellte Leistung: ");
+  Serial.print((float)powerdemand/10.0); //Current setpoint ausgeben
+  Serial.println(" %");
 
-  Serial.println(canWrite(voltamp, sendId_broad)); //Nachricht senden und Ergebnis ausgeben
+  if(digitalRead(ENABLE) == HIGH){
+
+    unsigned char voltamp[8] = {0x01, lowByte(powerdemand), highByte(powerdemand), lowByte(outputvoltage), highByte(outputvoltage), lowByte(outputcurrent), highByte(outputcurrent), 0x00}; //Nachricht neu generieren
+    Serial.println(canWrite(voltamp, sendId_broad)); //Nachricht senden und Ergebnis ausgeben
+
+  }else if(digitalRead(ENABLE) == LOW){
+
+    unsigned char voltamp[8] = {0x00, lowByte(powerdemand), highByte(powerdemand), lowByte(outputvoltage), highByte(outputvoltage), lowByte(outputcurrent), highByte(outputcurrent), 0x00}; //Nachricht neu generieren
+    Serial.println(canWrite(voltamp, sendId_broad)); //Nachricht senden und Ergebnis ausgeben
+
+  }
+
   canRead(); //Lesefunktion aufrufen
   Serial.println(); //Absatz
 
@@ -244,10 +275,11 @@ void myTimer1() { //zyklisch vom Timer aufgerufene Funktion
 *************************************************/
 void setup() {
 
+  pinMode(ENABLE, INPUT);
+
   Serial.begin(115200); //Serielle Schnittstelle starten
 
   while(CAN_OK != CAN.begin(CAN_500KBPS, MCP_8MHz)){ //CAN Bus initialisieren
- //  while(CAN_OK != CAN.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ)){ //für Bibliothek von J.Fowler
 
     Serial.println("CAN Initialisierung fehlgeschlagen, Neustart");
     delay(200);
@@ -256,9 +288,7 @@ void setup() {
 
   Serial.println("CAN Initialisierung erfolgreich");
 
-  //CAN.setMode(MCP_NORMAL); //Bibliothek von J.Fowler
-
-  timer1.setInterval(900, myTimer1); //Zeit und Funktion des Timers definieren
+  timer1.setInterval(720, myTimer1); //Zeit und Funktion des Timers definieren
 
 }
 
