@@ -1,7 +1,7 @@
 //Bibliotheken einbinden
 
 #include <Arduino.h>
-#include <mcp_can.h> //aktuell für SeeedStudio Library, Codeanpassung (mcp_can.cpp) von horace3 von Github
+#include <mcp_can.h>
 #include <SPI.h>
 #include <SimpleTimer.h>
 
@@ -9,11 +9,13 @@
 
 #define SPI_CS_PIN 10 //CS Pin
 #define POTI 0 //A0 für Poti
-#define ENABLE 9 //D9 für Enable Kontakt der Zero, Attached über 5V Spannungsversorgung
+#define ATTACHED 9
 
-word outputvoltage = 1162; //setze max Spannung auf 116V (offset = 0,1)
-word outputcurrent = 250; //setze max Strom auf 26A (offset = 0,1)
+word outputvoltage = 1164; //setze max Spannung auf 116,4V (offset = 0,1)
+word outputcurrent = 250; //setze max Strom auf 25A (offset = 0,1)
 word powerdemand = 1000; //setze max Leistung auf 100% (offset = 0,1)
+
+int charge_mode = LOW; //Statusvariable für Zero charge mode und Lader Ein/Standby
 float poti = 0;
 
 unsigned long int sendId_broad = 0x2FF; //Broadcast, nicht extended
@@ -49,6 +51,7 @@ unsigned long int receiveId; //ID des Senders
 MCP_CAN CAN(SPI_CS_PIN); //CS Pin für SPI setzen
 
 SimpleTimer timer1; //timer Objekt erzeugen
+SimpleTimer timer2;
 
 //Funktionen
 
@@ -97,6 +100,12 @@ void canRead(){
       float pv_mains = (((float)buf[2]*256.0) + ((float)buf[1]))/10.0; //highByte/lowByte + offset
       Serial.print(pv_mains);
       Serial.println(" A"); //Absatz
+
+      if(pv_current <= 2 && pv_voltage > 1162){ //Strom unter 0,2A und vollgeladen
+
+        charge_mode = LOW; //ausschalten wenn Ende des Ladevorgangs erreicht
+
+      }
 
       switch (buf[0]) { //Statusbyte auslesen
 
@@ -147,6 +156,16 @@ void canRead(){
       Serial.print(pv_temp2);
       Serial.println(" °C"); //Absatz
 
+      if(pv_voltage_in >= 180){ //Eingangsspannung größer 180V
+
+        charge_mode = HIGH; //schalte Motorrad in Lademodus
+
+      }else if(pv_voltage_in < 180){
+
+        charge_mode = LOW; //schalte Motorrad Lademodus aus
+
+      }
+
     }else if(receiveId == recId_err1){ //Charger address = 1, Error
     //if(receiveId == recId_err2){ //Charger address = 2, Error
     //if(receiveId == recId_err3){ //Charger address = 3, Error
@@ -176,7 +195,10 @@ void canRead(){
         case B00000010: Serial.print("Fehler: Übertemperatur;");break;
         case B00000100: Serial.print("Fehler: Eingangsspannung unzulässig;");break;
         case B00001000: Serial.print("Fehler: AC Überspannung;");break;
-        case B00010000: Serial.print("Fehler: AC Unterspannung;");break;
+        case B00010000:
+          Serial.print("Fehler: AC Unterspannung;");
+          charge_mode = LOW;
+          break;
         case B00100000: Serial.print("Fehler: Übertemperatur;");break;
         case B01000000: Serial.print("Fehler: Untertemperatur;");break;
         case B10000000: Serial.print("Fehler: Stromlimitierung;");break;
@@ -244,7 +266,7 @@ void myTimer1() { //zyklisch vom Timer aufgerufene Funktion
 
   if(powerdemand > 1000.0){
 
-    powerdemand = 1000.0; //begrenze auf 320 falls Ergebnis größer ist
+    powerdemand = 1000.0; //begrenze auf 1000 falls Ergebnis größer ist
 
   }
 
@@ -252,22 +274,33 @@ void myTimer1() { //zyklisch vom Timer aufgerufene Funktion
   Serial.print((float)powerdemand/10.0); //Current setpoint ausgeben
   Serial.println(" %");
 
-  if(digitalRead(ENABLE) == HIGH){
+  if(charge_mode == HIGH){
 
     unsigned char voltamp[8] = {0x01, lowByte(powerdemand), highByte(powerdemand), lowByte(outputvoltage), highByte(outputvoltage), lowByte(outputcurrent), highByte(outputcurrent), 0x00}; //Nachricht neu generieren
     Serial.println(canWrite(voltamp, sendId_broad)); //Nachricht senden und Ergebnis ausgeben
 
-  }else if(digitalRead(ENABLE) == LOW){
+  }else if(charge_mode == LOW){
 
     unsigned char voltamp[8] = {0x00, lowByte(powerdemand), highByte(powerdemand), lowByte(outputvoltage), highByte(outputvoltage), lowByte(outputcurrent), highByte(outputcurrent), 0x00}; //Nachricht neu generieren
     Serial.println(canWrite(voltamp, sendId_broad)); //Nachricht senden und Ergebnis ausgeben
 
   }
 
+  Serial.println();
+
+}
+
+/************************************************
+** Function name:           myTimer2
+** Descriptions:            Function of timer2
+*************************************************/
+void myTimer2(){
+
   canRead(); //Lesefunktion aufrufen
   Serial.println(); //Absatz
 
 }
+
 
 /************************************************
 ** Function name:           setup
@@ -275,7 +308,8 @@ void myTimer1() { //zyklisch vom Timer aufgerufene Funktion
 *************************************************/
 void setup() {
 
-  pinMode(ENABLE, INPUT);
+  pinMode(ATTACHED, OUTPUT); //charging mode pin for Zero
+  digitalWrite(ATTACHED, LOW);
 
   Serial.begin(115200); //Serielle Schnittstelle starten
 
@@ -288,7 +322,8 @@ void setup() {
 
   Serial.println("CAN Initialisierung erfolgreich");
 
-  timer1.setInterval(720, myTimer1); //Zeit und Funktion des Timers definieren
+  timer1.setInterval(750, myTimer1); //Zeit und Funktion des Timers definieren
+  timer2.setInterval(300, myTimer2);
 
 }
 
@@ -299,5 +334,16 @@ void setup() {
 void loop() {
 
   timer1.run(); //Timer starten
+  timer2.run();
+
+  if(charge_mode == LOW){
+
+    digitalWrite(ATTACHED, LOW); //quit charging mode
+
+  }else if(charge_mode == HIGH){
+
+    digitalWrite(ATTACHED, HIGH); //set Zero into charging mode
+
+  }
 
 }
