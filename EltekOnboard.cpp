@@ -1,6 +1,5 @@
 //Bibliotheken einbinden
 
-#include <Arduino.h>
 #include <mcp_can.h>
 #include <SPI.h>
 #include <SimpleTimer.h>
